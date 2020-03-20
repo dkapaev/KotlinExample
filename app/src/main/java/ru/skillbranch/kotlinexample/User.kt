@@ -39,11 +39,20 @@ private constructor(
         }
         get() = _login!!
 
-    private val salt: String by lazy {
-        ByteArray(16).also {
-            SecureRandom().nextBytes(it)
-        }.toString()
-    }
+    // private val salt: String by lazy {
+    //     ByteArray(16).also {
+    //         SecureRandom().nextBytes(it)
+    //     }.toString()
+    // }
+
+    private var _salt: String? = null
+    private val salt: String
+        get() {
+            if (_salt == null) {
+                _salt = ByteArray(16).also { SecureRandom().nextBytes(it) }.toString()
+            }
+            return _salt ?: throw AssertionError("Set to null by another thread")
+        }
 
     private lateinit var passwordHash: String
 
@@ -70,6 +79,21 @@ private constructor(
         passwordHash = encrypt(code)
         accessCode = code
         sendAccessCodeToUser(rawPhone, code)
+    }
+
+    constructor( // for csv
+        firstName: String,
+        lastName: String?,
+        email: String?,
+        salt: String?,
+        hash: String?,
+        rawPhone: String?
+    ) : this(firstName, lastName, email = email, rawPhone = rawPhone, meta = mapOf("src" to "csv")) {
+        println("Secondary csv constructor")
+        if (!salt.isNullOrBlank() && !hash.isNullOrBlank()) {
+            this._salt = salt
+            this.passwordHash = hash
+        }
     }
 
     init {
@@ -117,6 +141,15 @@ private constructor(
         println("..... sending access code: $code on $phone")
     }
 
+    fun changeAccessCodeAndSendItToUser() {
+        phone?.let {
+            val code = generateAccessCode()
+            passwordHash = encrypt(code)
+            accessCode = code
+            sendAccessCodeToUser(it, code)
+        }
+    }
+
     private fun String.md5(): String {
         val md = MessageDigest.getInstance("MD5")
         val digest = md.digest(toByteArray())
@@ -133,24 +166,61 @@ private constructor(
         ): User {
             val (firstName, lastName) = fullName.fullNameToPair()
             return when {
-                !phone.isNullOrBlank() -> User(firstName, lastName, phone)
+                !phone.isNullOrBlank() -> User(
+                    firstName = firstName,
+                    lastName = lastName,
+                    rawPhone = phone
+                )
                 !email.isNullOrBlank() && !password.isNullOrBlank() -> User(
-                    firstName, lastName, email, password
+                    firstName = firstName,
+                    lastName = lastName,
+                    email = email,
+                    password = password
                 )
                 else -> throw IllegalArgumentException("Email or phone must be not null or blank")
             }
         }
 
-        private fun String.fullNameToPair(): Pair<String, String?> {
-            return this.split(" ").filter { it.isNotBlank() }.run {
-                when (size) {
-                    1 -> first() to null
-                    2 -> first() to last()
-                    else -> throw IllegalArgumentException(
-                        "FullName must contain only first name and last name, current split result ${this@fullNameToPair}"
-                    )
-                }
-            }
+        fun makeUserFromCsv(
+            fullName: String,
+            email: String? = null,
+            salt: String? = null,
+            hash: String? = null,
+            phone: String? = null
+        ): User {
+            val (firstName, lastName) = fullName.fullNameToPair()
+            return User(
+                firstName = firstName,
+                lastName = lastName,
+                email = email,
+                salt = salt,
+                hash = hash,
+                rawPhone = phone
+            )
         }
     }
+}
+
+private fun String.fullNameToPair(): Pair<String, String?> {
+    return this.split(" ").filter { it.isNotBlank() }.run {
+        when (size) {
+            1 -> first() to null
+            2 -> first() to last()
+            else -> throw IllegalArgumentException(
+                "FullName must contain only first name and last name, current split result ${this@fullNameToPair}"
+            )
+        }
+    }
+}
+
+fun String.toPhoneNumber(): String? {
+    // remove everything except + and digits
+    return this.replace("[^+\\d]".toRegex(), "")
+}
+
+fun String.isPhoneNumber(): Boolean {
+    val possiblePhoneNumber = this.toPhoneNumber().toString()
+    // phone number must start with a + and contain 11 digits
+    val regex = "\\+\\d{11}$".toRegex()
+    return regex.matches(possiblePhoneNumber)
 }
